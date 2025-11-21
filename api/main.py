@@ -4,11 +4,25 @@ import json
 import math
 import os
 import sqlite3
+import time
+import uuid
+from collections import defaultdict, deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+import requests
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
@@ -18,6 +32,17 @@ DEFAULT_DB = PROJECT_ROOT / "data" / "colleges.db"
 
 EARTH_RADIUS_MILES = 3958.8
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "profiles")
+SUPABASE_PUBLIC_BUCKET_URL = os.getenv(
+    "SUPABASE_STORAGE_PUBLIC_URL",
+    f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}"
+    if SUPABASE_URL
+    else None,
+)
+UPLOAD_RATE_LIMIT = 10
+UPLOAD_RATE_WINDOW = 60  # seconds
 
 PROFILE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS profiles (
@@ -33,6 +58,9 @@ CREATE TABLE IF NOT EXISTS profiles (
     avatar_url TEXT,
     website_url TEXT,
     showcase_video_url TEXT,
+    status TEXT DEFAULT 'pending',
+    review_notes TEXT,
+    reviewed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )
@@ -68,6 +96,15 @@ def ensure_profile_tables(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_owner ON profiles(owner_id)")
+    for column, ddl in (
+        ("status", "ALTER TABLE profiles ADD COLUMN status TEXT DEFAULT 'pending'"),
+        ("review_notes", "ALTER TABLE profiles ADD COLUMN review_notes TEXT"),
+        ("reviewed_at", "ALTER TABLE profiles ADD COLUMN reviewed_at TEXT"),
+    ):
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
 
 
@@ -153,6 +190,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+upload_limiter = SimpleRateLimiter(UPLOAD_RATE_LIMIT, UPLOAD_RATE_WINDOW)
+
 
 class PortfolioItemPayload(BaseModel):
     title: str
@@ -178,6 +217,70 @@ class ProfilePayload(BaseModel):
 class AuthContext(BaseModel):
     user_id: str
     email: Optional[str] = None
+
+
+class UploadMediaResponse(BaseModel):
+    public_url: str
+    storage_path: str
+
+
+class SimpleRateLimiter:
+    def __init__(self, max_calls: int, window_seconds: int):
+        self.max_calls = max_calls
+        self.window = window_seconds
+        self.calls: Dict[str, Deque[float]] = defaultdict(deque)
+
+    def check(self, key: str) -> None:
+        now = time.monotonic()
+        queue = self.calls[key]
+        while queue and now - queue[0] > self.window:
+            queue.popleft()
+        if len(queue) >= self.max_calls:
+            raise HTTPException(
+                status_code=429, detail="Upload rate limit exceeded. Please try again later."
+            )
+        queue.append(now)
+
+
+def sanitize_filename(filename: Optional[str]) -> str:
+    if not filename:
+        return "upload"
+    name = Path(filename).name
+    sanitized = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in name)
+    return sanitized or "upload"
+
+
+def build_storage_public_url(path: str) -> str:
+    if SUPABASE_PUBLIC_BUCKET_URL:
+        return f"{SUPABASE_PUBLIC_BUCKET_URL.rstrip('/')}/{path}"
+    raise HTTPException(status_code=500, detail="Supabase public bucket URL is not configured.")
+
+
+def upload_file_to_supabase(owner_id: str, file: UploadFile, kind: str) -> str:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        raise HTTPException(status_code=500, detail="Supabase storage is not configured on the API.")
+    filename = sanitize_filename(file.filename)
+    extension = Path(filename).suffix
+    storage_path = f"{owner_id}/{kind}/{uuid.uuid4().hex}{extension}"
+    target_url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
+    file.file.seek(0)
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "x-upsert": "true",
+        "Content-Type": file.content_type or "application/octet-stream",
+    }
+    response = requests.post(target_url, headers=headers, data=file.file.read(), timeout=60)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="Failed to upload media to Supabase storage.")
+    return storage_path
+
+
+def row_get(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, sqlite3.Row):
+        if key in row.keys():
+            return row[key]
+        return default
+    return row.get(key, default)
 
 
 def get_db():
@@ -508,6 +611,9 @@ def serialize_profile_row(row: sqlite3.Row, portfolio: List[Dict[str, Any]]) -> 
         "avatar_url": row["avatar_url"],
         "website_url": row["website_url"],
         "showcase_video_url": row["showcase_video_url"],
+        "status": row_get(row, "status", "pending"),
+        "review_notes": row_get(row, "review_notes"),
+        "reviewed_at": row_get(row, "reviewed_at"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "portfolio": portfolio,
@@ -667,8 +773,8 @@ def create_profile(
         """
         INSERT INTO profiles (
             owner_id, name, tagline, bio, home_city, home_state, program_focus, budget_focus,
-            avatar_url, website_url, showcase_video_url, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            avatar_url, website_url, showcase_video_url, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             auth.user_id,
@@ -682,6 +788,7 @@ def create_profile(
             payload.avatar_url,
             payload.website_url,
             payload.showcase_video_url,
+            "pending",
             now,
             now,
         ),
@@ -718,7 +825,8 @@ def update_profile(
         """
         UPDATE profiles
         SET name = ?, tagline = ?, bio = ?, home_city = ?, home_state = ?, program_focus = ?,
-            budget_focus = ?, avatar_url = ?, website_url = ?, showcase_video_url = ?, updated_at = ?
+            budget_focus = ?, avatar_url = ?, website_url = ?, showcase_video_url = ?, status = 'pending',
+            review_notes = NULL, reviewed_at = NULL, updated_at = ?
         WHERE id = ?
         """,
         (
@@ -753,6 +861,21 @@ def delete_profile(
     db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
     db.commit()
     return Response(status_code=204)
+
+
+@app.post("/profiles/upload-media", response_model=UploadMediaResponse)
+async def upload_profile_media(
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+    auth: AuthContext = Depends(require_auth),
+):
+    allowed_kinds = {"avatar", "portfolio", "video"}
+    if kind not in allowed_kinds:
+        raise HTTPException(status_code=400, detail="Invalid media kind.")
+    upload_limiter.check(auth.user_id)
+    storage_path = upload_file_to_supabase(auth.user_id, file, kind)
+    public_url = build_storage_public_url(storage_path)
+    return UploadMediaResponse(public_url=public_url, storage_path=storage_path)
 
 
 @app.get("/programs/{program_id}")

@@ -57,4 +57,22 @@ jobs:
             data/location_cities.csv
             data/teleport_fallback.json
             data/schools.html
+      - name: Publish release asset (latest)
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-cache
+          name: Latest ETL Cache
+          draft: false
+          prerelease: true
+          files: |
+            data/colleges.db
+            data/location_states.json
+            data/location_states.csv
+            data/location_cities.json
+            data/location_cities.csv
+            data/teleport_fallback.json
+            data/schools.html
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

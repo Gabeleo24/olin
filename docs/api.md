@@ -51,10 +51,16 @@ By default UVicorn listens on `http://127.0.0.1:8000`. Swagger UI is available a
 | PUT | `/profiles/{profile_id}` | Update an owned profile + portfolio set — requires Supabase auth |
 | DELETE | `/profiles/{profile_id}` | Delete an owned profile — requires Supabase auth |
 | POST | `/profiles/{profile_id}/portfolio` | Append a portfolio item to an existing profile — requires Supabase auth |
+| POST | `/profiles/upload-media` | Securely upload avatar/portfolio files to Supabase Storage; accepts `multipart/form-data` (`kind`, `file`). Returns public URL + storage path. |
 
 The API hits the SQLite cache directly on each request; make sure `data/colleges.db` exists (run `scripts/etl_college_data.py` first).
 
 > **Auth note**: Supabase issues the JWT used by the FastAPI auth dependency. Set `SUPABASE_JWT_SECRET` on the API process and send the access token returned by `supabase.auth.getSession()` as the `Authorization` header for create/update/delete operations.
+
+### Profile moderation & uploads
+
+- Each profile now exposes `status` (`pending`, `approved`, `rejected`), `review_notes`, and `reviewed_at` so you can build lightweight moderation UIs.
+- Media uploads are proxied through `/profiles/upload-media`, which stores files under `SUPABASE_STORAGE_BUCKET` using the service role key. Buckets should be marked **public** so the returned `public_url` can be embedded directly in the frontend.
 
 ### Profile Payload
 

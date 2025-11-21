@@ -7,5 +7,7 @@ client/electron/dist/
 dist/
 data/colleges.db
 data/*.db
+.env.local
+client/.env.local
 
 

@@ -233,9 +233,17 @@ export interface StudentProfile {
   avatar_url: string | null;
   website_url: string | null;
   showcase_video_url: string | null;
+  status?: string | null;
+  review_notes?: string | null;
+  reviewed_at?: string | null;
   created_at: string;
   updated_at: string;
   portfolio: PortfolioItem[];
+}
+
+export interface UploadMediaResponse {
+  public_url: string;
+  storage_path: string;
 }
 
 export interface CreatePortfolioItemPayload {
@@ -371,6 +379,31 @@ export async function updateStudentProfile(
 
 export async function deleteStudentProfile(profileId: number): Promise<void> {
   await authedDelete(`/profiles/${profileId}`);
+}
+
+export async function uploadProfileMedia(
+  file: File,
+  kind: 'avatar' | 'portfolio' | 'video' = 'portfolio',
+): Promise<UploadMediaResponse> {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error('You must be signed in to upload media.');
+  }
+  const formData = new FormData();
+  formData.append('kind', kind);
+  formData.append('file', file);
+  const response = await fetch(buildUrl('/profiles/upload-media'), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || 'Upload failed.');
+  }
+  return response.json() as Promise<UploadMediaResponse>;
 }
 
 // Legacy mock implementations (settings page still relies on these placeholders)

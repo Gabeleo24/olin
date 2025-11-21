@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   StudentProfile,
   fetchProfilesDirectory,
@@ -7,6 +7,7 @@ import {
   fetchMyProfile,
   updateStudentProfile,
   deleteStudentProfile,
+  uploadProfileMedia,
 } from '../lib/api';
 import { useAuth } from '../hooks/useAuth';
 
@@ -15,6 +16,8 @@ type PortfolioDraft = {
   description: string;
   media_url: string;
   tags: string;
+  uploading?: boolean;
+  uploadError?: string | null;
 };
 
 const emptyPortfolioDraft: PortfolioDraft = {
@@ -22,6 +25,8 @@ const emptyPortfolioDraft: PortfolioDraft = {
   description: '',
   media_url: '',
   tags: '',
+  uploading: false,
+  uploadError: null,
 };
 
 const initialForm: CreateProfilePayload = {
@@ -53,6 +58,9 @@ export default function ProfilesPage() {
   const [ownedProfileLoading, setOwnedProfileLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarUploadError, setAvatarUploadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +152,8 @@ export default function ProfilesPage() {
             description: item.description ?? '',
             media_url: item.media_url ?? '',
             tags: item.tags.join(', '),
+            uploading: false,
+            uploadError: null,
           }))
         : [{ ...emptyPortfolioDraft }],
     );
@@ -155,6 +165,50 @@ export default function ProfilesPage() {
       next[index] = { ...next[index], [field]: value };
       return next;
     });
+  };
+
+  const handleAvatarFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setAvatarUploadError(null);
+    setAvatarUploading(true);
+    try {
+      const result = await uploadProfileMedia(file, 'avatar');
+      setFormState((prev) => ({
+        ...prev,
+        avatar_url: result.public_url,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed.';
+      setAvatarUploadError(message);
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const handlePortfolioFileChange = async (index: number, file: File) => {
+    setPortfolioDrafts((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], uploading: true, uploadError: null };
+      return next;
+    });
+    try {
+      const result = await uploadProfileMedia(file, 'portfolio');
+      handlePortfolioChange(index, 'media_url', result.public_url);
+      setPortfolioDrafts((prev) => {
+        const next = [...prev];
+        next[index] = { ...next[index], uploading: false, uploadError: null };
+        return next;
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload failed.';
+      setPortfolioDrafts((prev) => {
+        const next = [...prev];
+        next[index] = { ...next[index], uploading: false, uploadError: message };
+        return next;
+      });
+    }
   };
 
   const addPortfolioDraft = () => {
@@ -307,6 +361,23 @@ export default function ProfilesPage() {
                 <p className="text-xs text-gray-500">
                   {[profile.program_focus, profile.home_state].filter(Boolean).join(' · ') || 'Open focus'}
                 </p>
+                {profile.status && (
+                  <span
+                    className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                      profile.status === 'approved'
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : profile.status === 'rejected'
+                          ? 'bg-red-50 text-red-600'
+                          : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
+                    {profile.status === 'approved'
+                      ? 'Approved'
+                      : profile.status === 'rejected'
+                        ? 'Needs edits'
+                        : 'Pending review'}
+                  </span>
+                )}
                 {profile.tagline && <p className="mt-1 text-sm text-gray-600">{profile.tagline}</p>}
               </button>
             ))}
@@ -339,6 +410,23 @@ export default function ProfilesPage() {
                 )}
                 <div>
                   <p className="text-xl font-semibold text-gray-900">{selectedProfile.name}</p>
+                  {selectedProfile.status && (
+                    <span
+                      className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        selectedProfile.status === 'approved'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : selectedProfile.status === 'rejected'
+                            ? 'bg-red-50 text-red-600'
+                            : 'bg-amber-50 text-amber-700'
+                      }`}
+                    >
+                      {selectedProfile.status === 'approved'
+                        ? 'Approved'
+                        : selectedProfile.status === 'rejected'
+                          ? 'Needs edits'
+                          : 'Pending review'}
+                    </span>
+                  )}
                   {selectedProfile.tagline && <p className="text-sm text-gray-500">{selectedProfile.tagline}</p>}
                   <p className="text-xs text-gray-500">
                     {[selectedProfile.home_city, selectedProfile.home_state].filter(Boolean).join(', ') || 'Remote'}
@@ -346,6 +434,12 @@ export default function ProfilesPage() {
                 </div>
               </div>
               {selectedProfile.bio && <p className="text-sm leading-relaxed text-gray-700">{selectedProfile.bio}</p>}
+              {selectedProfile.review_notes && (
+                <div className="rounded-lg border border-red-100 bg-red-50 p-3 text-xs text-red-700">
+                  <p className="font-semibold">Moderator notes</p>
+                  <p>{selectedProfile.review_notes}</p>
+                </div>
+              )}
               <div className="grid gap-2 text-sm text-gray-600 sm:grid-cols-2">
                 <FieldStat label="Program Focus" value={selectedProfile.program_focus || '—'} />
                 <FieldStat label="Budget Focus" value={selectedProfile.budget_focus || '—'} />
@@ -439,6 +533,11 @@ export default function ProfilesPage() {
                 {ownedProfile
                   ? 'You can update or delete your existing profile below.'
                   : 'Create your first showcase profile below.'}
+                {ownedProfile?.status && (
+                  <span className="ml-1 text-xs text-gray-500">
+                    Status: {ownedProfile.status === 'approved' ? 'Approved' : ownedProfile.status === 'rejected' ? 'Needs edits' : 'Pending review'}
+                  </span>
+                )}
               </div>
               <button
                 type="button"
@@ -497,6 +596,30 @@ export default function ProfilesPage() {
               value={formState.avatar_url ?? ''}
               onChange={(value) => handleFormChange('avatar_url', value)}
             />
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium uppercase tracking-wide text-gray-500">Avatar Upload</label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={avatarUploading || !session}
+                  className="rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {avatarUploading ? 'Uploading…' : 'Upload Image'}
+                </button>
+                {formState.avatar_url && (
+                  <span className="text-xs text-gray-500 truncate max-w-[160px]">{formState.avatar_url}</span>
+                )}
+              </div>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleAvatarFileChange}
+              />
+              {avatarUploadError && <p className="text-xs text-red-600">{avatarUploadError}</p>}
+            </div>
             <FormField
               label="Website / Linktree"
               value={formState.website_url ?? ''}
@@ -552,6 +675,36 @@ export default function ProfilesPage() {
                     value={draft.media_url}
                     onChange={(value) => handlePortfolioChange(index, 'media_url', value)}
                   />
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                      Upload File (optional)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <label
+                        htmlFor={`portfolio-upload-${index}`}
+                        className={`cursor-pointer rounded-md border border-gray-200 px-3 py-2 text-sm font-semibold ${
+                          draft.uploading ? 'text-gray-400' : 'text-indigo-600 hover:bg-indigo-50'
+                        }`}
+                      >
+                        {draft.uploading ? 'Uploading…' : 'Upload Media'}
+                      </label>
+                      <input
+                        id={`portfolio-upload-${index}`}
+                        type="file"
+                        accept="image/*,video/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          event.target.value = '';
+                          if (file) handlePortfolioFileChange(index, file);
+                        }}
+                      />
+                      {draft.media_url && (
+                        <span className="text-xs text-gray-500 truncate max-w-[180px]">{draft.media_url}</span>
+                      )}
+                    </div>
+                    {draft.uploadError && <p className="text-xs text-red-600">{draft.uploadError}</p>}
+                  </div>
                   <FormField
                     label="Tags (comma separated)"
                     value={draft.tags}
