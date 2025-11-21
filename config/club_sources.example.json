@@ -1,0 +1,51 @@
+[
+  {
+    "school_name": "Demo University",
+    "unit_id": 123456,
+    "city": "Sampletown",
+    "state": "CA",
+    "source": {
+      "type": "json_api",
+      "name": "Presence Demo",
+      "url": "https://demo.campuslabs.com/engage/api/organizations",
+      "params": {
+        "take": 200
+      },
+      "pagination": {
+        "mode": "offset",
+        "size_param": "take",
+        "offset_param": "skip",
+        "page_size": 200
+      },
+      "data_path": "value",
+      "field_map": {
+        "club_name": "name",
+        "summary": "description",
+        "category": "categories.0.name",
+        "contact_email": "primaryEmail",
+        "contact_url": "profileUrl",
+        "tags": "tags"
+      }
+    }
+  },
+  {
+    "school_name": "CSV College",
+    "unit_id": 654321,
+    "city": "Export",
+    "state": "TX",
+    "source": {
+      "type": "csv_file",
+      "name": "Manual Upload",
+      "path": "data/csv_college_clubs.csv",
+      "field_map": {
+        "club_name": "Organization",
+        "category": "Category",
+        "membership_size": "Members",
+        "contact_email": "Email",
+        "summary": "Description"
+      }
+    }
+  }
+]
+
+

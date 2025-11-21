@@ -1,0 +1,5 @@
+"""
+Club ingestion toolkit package.
+"""
+
+

@@ -1,0 +1,60 @@
+name: Weekly Data Refresh
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Rebuild college cache
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure API key is present
+        run: |
+          if [ -z "${{ secrets.COLLEGE_SCORECARD_API_KEY }}" ]; then
+            echo "::error ::COLLEGE_SCORECARD_API_KEY secret is not configured."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+
+      - name: Run ETL and enrichment scripts
+        env:
+          COLLEGE_SCORECARD_API_KEY: ${{ secrets.COLLEGE_SCORECARD_API_KEY }}
+        run: |
+          set -euo pipefail
+          python scripts/etl_college_data.py
+          python scripts/cost_of_living.py
+          python scripts/update_teleport_fallback.py
+          python scripts/augment_state_costs.py
+          python scripts/generate_location_profiles.py --csv
+          python scripts/generate_schools_html.py
+
+      - name: Upload refreshed cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: colleges-cache
+          path: |
+            data/colleges.db
+            data/location_states.json
+            data/location_states.csv
+            data/location_cities.json
+            data/location_cities.csv
+            data/teleport_fallback.json
+            data/schools.html
+

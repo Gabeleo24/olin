@@ -1,0 +1,11 @@
+.env
+config/club_sources.json
+node_modules/
+client/node_modules/
+client/dist/
+client/electron/dist/
+dist/
+data/colleges.db
+data/*.db
+
+

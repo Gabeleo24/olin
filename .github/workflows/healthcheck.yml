@@ -1,0 +1,27 @@
+name: Production Health Checks
+
+on:
+  schedule:
+    # Twice per day
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    env:
+      API_HEALTHCHECK_URL: ${{ secrets.API_HEALTHCHECK_URL }}
+      CLIENT_HEALTHCHECK_URL: ${{ secrets.CLIENT_HEALTHCHECK_URL }}
+    steps:
+      - name: Check API endpoint
+        if: ${{ env.API_HEALTHCHECK_URL != '' }}
+        run: |
+          echo "Pinging $API_HEALTHCHECK_URL"
+          curl --fail --retry 3 --retry-delay 5 "$API_HEALTHCHECK_URL"
+
+      - name: Check client endpoint
+        if: ${{ env.CLIENT_HEALTHCHECK_URL != '' }}
+        run: |
+          echo "Pinging $CLIENT_HEALTHCHECK_URL"
+          curl --fail --retry 3 --retry-delay 5 "$CLIENT_HEALTHCHECK_URL"
+
